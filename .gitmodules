@@ -1,0 +1,3 @@
+[submodule "google_adk_tutorial"]
+	path = google_adk_tutorial
+	url = https://github.com/wallacepck/google-adk-tutorial
