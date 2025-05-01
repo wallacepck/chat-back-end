@@ -16,11 +16,18 @@ print(f"Google API Key set: {'Yes' if os.environ.get('GOOGLE_API_KEY') else 'No'
 print(f"OpenAI API Key set: {'Yes' if os.environ.get('OPENAI_API_KEY') else 'No'}")
 print(f"Anthropic API Key set: {'Yes' if os.environ.get('ANTHROPIC_API_KEY') else 'No'}")
 
+UNIFIED_CONVERSATION_ID = "one_conversation"
+
 class Conversation:
-    def __init__(self, conversation_id: str, user_id: str, runner: Runner):
-        self.conversation_id = conversation_id
+    def __init__(self, user_id: str, runner: Runner):
         self.user_id = user_id
         self.runner = runner
+
+class ConversationOverloadError(RuntimeError):
+    pass
+
+class InvalidConversationError(ValueError):
+    pass
 
 # Thanks to
 # https://stackoverflow.com/questions/2257441/random-string-generation-with-upper-case-letters-and-digits
@@ -34,46 +41,34 @@ class ConversationManager:
         self.conversations: dict[Conversation] = {}
         self.session_service = InMemorySessionService()
 
-    def new_conversation(self, user_id: str) -> str:
+    def init_conversation(self, user_id: str) -> None:
         if len(self.conversations) > self.MAX_CONVERSATION_COUNT:
-            raise RuntimeError("Cannot create new conversation, too many ongoing conversations!")
-
-        conversation_id = random_string_id(16)
-        # The collision probability is very low
-        while (conversation_id in self.conversations):
-            conversation_id = random_string_id(16)
-
-        runner = self.create_runner(conversation_id, user_id, agent=root_agent)
-
-        convo = Conversation(
-            conversation_id,
-            user_id,
-            runner
-        )
-        self.conversations[conversation_id] = convo
-
-        return convo.conversation_id
+            raise ConversationOverloadError()
+        if (not (user_id in self.conversations)):
+            runner = self.create_runner(user_id, agent=root_agent)
+            convo = Conversation(
+                user_id,
+                runner
+            )
+            self.conversations[user_id] = convo
     
-    async def push_conversation(self,  conversation_id: str, user_id: str, query: str):
-        if (not (conversation_id in self.conversations)):
-            raise RuntimeError("No such conversation!") 
-        convo = self.conversations[conversation_id]
-        if (convo.user_id != user_id):
-            raise RuntimeError("No such conversation!")
+    async def push_conversation(self, user_id: str, query: str):
+        if (not (user_id in self.conversations)):
+            raise InvalidConversationError() 
+        convo = self.conversations[user_id]
+        assert convo.user_id == user_id
         
-        return await self.call_agent_async(convo.runner, user_id, convo.conversation_id, query)
+        return await self.call_agent_async(convo.runner, user_id, query)
 
-    def close_conversation(self,  conversation_id: str, user_id: str):
-        if (not (conversation_id in self.conversations)):
-            raise RuntimeError("No such conversation!") 
-        convo = self.conversations[conversation_id]
-        if (convo.user_id != user_id):
-            raise RuntimeError("No such conversation!")
+    def close_conversation(self, user_id: str):
+        if (not (user_id in self.conversations)):
+            raise InvalidConversationError() 
+        convo = self.conversations.pop(user_id)
         
         self.session_service.delete_session(
             app_name=self.app_name, # Use the consistent app name
             user_id=user_id,
-            session_id=conversation_id
+            session_id=UNIFIED_CONVERSATION_ID
         )
         
         del convo
@@ -81,7 +76,7 @@ class ConversationManager:
     """
     Session code adapted from Google ADK tutorial
     """
-    def create_runner(self, conversation_id: str, user_id: str, agent) -> Runner:
+    def create_runner(self, user_id: str, agent) -> Runner:
         """
         Creates a new conversation with a multi-agent AI, using in memory session.
 
@@ -100,15 +95,15 @@ class ConversationManager:
         session_stateful = self.session_service.create_session(
             app_name=self.app_name, # Use the consistent app name
             user_id=user_id,
-            session_id=conversation_id,
+            session_id=UNIFIED_CONVERSATION_ID,
             state=initial_state # <<< Initialize state during creation
         )
-        print(f"✅ Session '{conversation_id}' created for user '{user_id}'.")
+        print(f"✅ Session '{UNIFIED_CONVERSATION_ID}' created for user '{user_id}'.")
 
         # Verify the initial state was set correctly
         retrieved_session = self.session_service.get_session(app_name=self.app_name,
                                                                 user_id=user_id,
-                                                                session_id = conversation_id)
+                                                                session_id = UNIFIED_CONVERSATION_ID)
         if (not retrieved_session):
             raise RuntimeError("Could not create new session!")
 
@@ -124,7 +119,7 @@ class ConversationManager:
     """
     Runner code adapted from Google ADK tutorial
     """
-    async def call_agent_async(self, runner, user_id, session_id, query: str) -> str:
+    async def call_agent_async(self, runner, user_id, query: str) -> str:
         """Sends a query to the agent and prints the final response."""
         print(f"\n>>> User Query: {query}")
 
@@ -135,7 +130,7 @@ class ConversationManager:
 
         # Key Concept: run_async executes the agent logic and yields Events.
         # We iterate through events to find the final answer.
-        async for event in runner.run_async(user_id=user_id, session_id=session_id, new_message=content):
+        async for event in runner.run_async(user_id=user_id, session_id=UNIFIED_CONVERSATION_ID, new_message=content):
             # You can uncomment the line below to see *all* events during execution
             # print(f"  [Event] Author: {event.author}, Type: {type(event).__name__}, Final: {event.is_final_response()}, Content: {event.content}")
 

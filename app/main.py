@@ -9,7 +9,7 @@ import firebase_admin
 from pydantic import BaseModel
 
 from .config import get_firebase_user_from_token, get_settings
-from .session import ConversationManager
+from .session import ConversationManager, ConversationOverloadError, InvalidConversationError
 
 app = FastAPI()
 app.include_router(router)
@@ -27,7 +27,7 @@ app.add_middleware(
 class Message(BaseModel):
     text: str
 
-convo = ConversationManager("weather_bot", 1)
+convo = ConversationManager("weather_bot", 3)
 
 import logging
 from fastapi import FastAPI, Request, status
@@ -41,17 +41,25 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 	return JSONResponse(content=content, status_code=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
 @app.get("/session")
-def update_item(user: Annotated[dict, Depends(get_firebase_user_from_token)]):
-    convo_id = convo.new_conversation(user["uid"])
-    return {"id": user["uid"], "convo_id": convo_id}
+def new_session(user: Annotated[dict, Depends(get_firebase_user_from_token)]):
+    try:
+        convo.init_conversation(user["uid"]) 
+        return {"id": user["uid"]}
+    except ConversationOverloadError as e:
+        return JSONResponse(content={'message': "Too many ongoing conversations, please try again later."}, 
+                            status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
 
-@app.put("/session/{conversation_id}")
-async def update_item(user: Annotated[dict, Depends(get_firebase_user_from_token)], conversation_id: str, message: Message):
-    response = await convo.push_conversation(conversation_id, user["uid"], message.text)
-    print(message, " Responded with: ", response)
-    return {"id": user["uid"], "response": response}
+@app.put("/session/talk")
+async def push_convo(user: Annotated[dict, Depends(get_firebase_user_from_token)], message: Message):
+    try:
+        response = await convo.push_conversation(user["uid"], message.text)
+        print(message, " Responded with: ", response)
+        return {"id": user["uid"], "response": response}
+    except InvalidConversationError as e:
+        return JSONResponse(content={'message': "Could not find an ongoing conversation for this user! Please init the conversation first."}, 
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-@app.put("/session/{conversation_id}/close")
-def update_item(user: Annotated[dict, Depends(get_firebase_user_from_token)], conversation_id: str):
-    convo.close_conversation(conversation_id, user["uid"])
-    return {"id": user["uid"], "closed": True}
+@app.put("/session/close")
+def close_convo(user: Annotated[dict, Depends(get_firebase_user_from_token)]):
+    convo.close_conversation(user["uid"])
+    return {"id": user["uid"], "closed": "true"}
