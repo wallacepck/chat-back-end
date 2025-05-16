@@ -2,13 +2,14 @@ from typing import Self
 import os
 import random
 import string
+import json
 from dotenv import load_dotenv
 
 from google.genai import types
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 
-from google_adk_tutorial.multi_tool_agent.agent import root_agent
+from .google_adk_tutorial.multi_tool_agent.agent import root_agent
 
 load_dotenv("./env")
 print("API Keys Set:")
@@ -59,6 +60,14 @@ class ConversationManager:
         assert convo.user_id == user_id
         
         return await self.call_agent_async(convo.runner, user_id, query)
+    
+    async def generate_conversation(self, user_id: str, query: str):
+        if (not (user_id in self.conversations)):
+            raise InvalidConversationError() 
+        convo = self.conversations[user_id]
+        assert convo.user_id == user_id
+        
+        return self.generate_agent_async(convo.runner, user_id, query)
 
     def close_conversation(self, user_id: str):
         if (not (user_id in self.conversations)):
@@ -143,3 +152,26 @@ class ConversationManager:
                     final_response_text = f"Agent escalated: {event.error_message or 'No specific message.'}"
                 # Add more checks here if needed (e.g., specific error codes)
                 return final_response_text # Stop processing events once the final response is found
+    
+    async def generate_agent_async(self, runner, user_id, query: str):
+        """Sends a query to the agent and streams any resulting events."""
+        print(f"\n>>> User Query: {query}")
+
+        # Prepare the user's message in ADK format
+        content = types.Content(role='user', parts=[types.Part(text=query)])
+
+        # Key Concept: run_async executes the agent logic and yields Events.
+        async for event in runner.run_async(user_id=user_id, session_id=UNIFIED_CONVERSATION_ID, new_message=content):
+            if event.content and event.content.parts:
+                if not event.partial:
+                    try:
+                        msg = {
+                            "parts": event.content.to_json_dict()["parts"],
+                            "author": event.author,
+                            "is_final": event.is_final_response()
+                        }
+                        yield json.dumps(msg) + "\n\n"
+                    except Exception as e:
+                        print(f"Failed to dump event to json!, {e}")
+            elif event.actions and event.actions.escalate: # Handle potential errors/escalations
+                yield f"Agent escalated: {event.error_message or 'No specific message.'}\n\n"

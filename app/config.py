@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     app_name: str = "demofirebase"
     env: str = os.getenv("ENV", "development")
     # Needed for CORS
-    frontend_url_regex: str = os.getenv("FRONTEND_UR_REGEX", "NA")
+    frontend_url_regex: str = os.getenv("FRONTEND_URL_REGEX", "NA")
 
 @lru_cache
 def get_settings() -> Settings:

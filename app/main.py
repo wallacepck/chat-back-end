@@ -32,7 +32,7 @@ convo = ConversationManager("weather_bot", 3)
 import logging
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
 	exc_str = f'{exc}'.replace('\n', ' ').replace('   ', ' ')
@@ -52,9 +52,11 @@ def new_session(user: Annotated[dict, Depends(get_firebase_user_from_token)]):
 @app.put("/session/talk")
 async def push_convo(user: Annotated[dict, Depends(get_firebase_user_from_token)], message: Message):
     try:
-        response = await convo.push_conversation(user["uid"], message.text)
-        print(message, " Responded with: ", response)
-        return {"id": user["uid"], "response": response}
+        generator = await convo.generate_conversation(user["uid"], message.text)
+        return StreamingResponse(
+            generator, 
+            media_type='text/event-stream'
+        )
     except InvalidConversationError as e:
         return JSONResponse(content={'message': "Could not find an ongoing conversation for this user! Please init the conversation first."}, 
                             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
