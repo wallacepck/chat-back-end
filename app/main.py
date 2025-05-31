@@ -41,9 +41,9 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 	return JSONResponse(content=content, status_code=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
 @app.get("/session")
-def new_session(user: Annotated[dict, Depends(get_firebase_user_from_token)]):
+async def new_session(user: Annotated[dict, Depends(get_firebase_user_from_token)]):
     try:
-        convo.init_conversation(user["uid"]) 
+        await convo.init_conversation(user["uid"]) 
         return {"id": user["uid"]}
     except ConversationOverloadError as e:
         return JSONResponse(content={'message': "Too many ongoing conversations, please try again later."}, 

@@ -1,4 +1,3 @@
-from typing import Self
 import os
 import random
 import string
@@ -7,9 +6,9 @@ from dotenv import load_dotenv
 
 from google.genai import types
 from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
+from google.adk.sessions import Session, InMemorySessionService
 
-from .google_adk_tutorial.multi_tool_agent.agent import root_agent
+from .agent_team.agent import root_agent
 
 load_dotenv("./env")
 print("API Keys Set:")
@@ -42,11 +41,11 @@ class ConversationManager:
         self.conversations: dict[Conversation] = {}
         self.session_service = InMemorySessionService()
 
-    def init_conversation(self, user_id: str) -> None:
+    async def init_conversation(self, user_id: str) -> None:
         if len(self.conversations) > self.MAX_CONVERSATION_COUNT:
             raise ConversationOverloadError()
         if (not (user_id in self.conversations)):
-            runner = self.create_runner(user_id, agent=root_agent)
+            runner = await self.create_runner(user_id, agent=root_agent)
             convo = Conversation(
                 user_id,
                 runner
@@ -85,7 +84,7 @@ class ConversationManager:
     """
     Session code adapted from Google ADK tutorial
     """
-    def create_runner(self, user_id: str, agent) -> Runner:
+    async def create_runner(self, user_id: str, agent) -> Runner:
         """
         Creates a new conversation with a multi-agent AI, using in memory session.
 
@@ -95,8 +94,9 @@ class ConversationManager:
         Returns:
             Runner: The Runner used to interact with the conversation
         """
-        # Define initial state data - user prefers Celsius initially
+        # Define initial state data
         initial_state = {
+            "user:mood": "Neutral",
             "user_preference_temperature_unit": "Celsius"
         }
 
@@ -153,21 +153,34 @@ class ConversationManager:
                 # Add more checks here if needed (e.g., specific error codes)
                 return final_response_text # Stop processing events once the final response is found
     
-    async def generate_agent_async(self, runner, user_id, query: str):
+    async def generate_agent_async(self, runner: Runner, user_id, query: str):
         """Sends a query to the agent and streams any resulting events."""
         print(f"\n>>> User Query: {query}")
 
         # Prepare the user's message in ADK format
         content = types.Content(role='user', parts=[types.Part(text=query)])
 
+        session: Session = await self.session_service.get_session(
+            app_name=self.app_name,
+            user_id=user_id, 
+            session_id=UNIFIED_CONVERSATION_ID
+        )
+
         # Key Concept: run_async executes the agent logic and yields Events.
         async for event in runner.run_async(user_id=user_id, session_id=UNIFIED_CONVERSATION_ID, new_message=content):
+            print(f"[{event.timestamp}] Event. Author: {event.author}")
             if event.content and event.content.parts:
                 if not event.partial:
+                    mood = session.state['user:mood']
+                    if event.actions and event.actions.state_delta:
+                        if 'user:mood' in event.actions.state_delta:
+                            mood = event.actions.state_delta['user:mood']
+                    print(f"Current mood is : {mood}")
                     try:
                         msg = {
                             "parts": event.content.to_json_dict()["parts"],
                             "author": event.author,
+                            "mood": mood,
                             "is_final": event.is_final_response()
                         }
                         yield json.dumps(msg) + "\n\n"
